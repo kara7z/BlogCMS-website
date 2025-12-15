@@ -176,7 +176,7 @@ echo htmlspecialchars($user_input, ENT_QUOTES, 'UTF-8');
 ### Frontend
 - **HTML5** — Semantic markup for accessibility.
 - **CSS3** — Custom styling with responsive design.
-- **Bootstrap 5** — CSS framework for rapid UI development.
+- **tailwind** — CSS framework for rapid UI development.
 - **JavaScript (Vanilla)** — Form validation and interactive elements.
 
 ### Security
@@ -275,7 +275,7 @@ echo htmlspecialchars($user_input, ENT_QUOTES, 'UTF-8');
 ### Setup Steps
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/blogcms.git
+   git clone https://github.com/kara7z/BlogCMS-website.git
    cd blogcms
    ```
 
