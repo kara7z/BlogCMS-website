@@ -1,3 +1,149 @@
+<?php
+session_start();
+require_once 'config.php';
+require_once 'functions.php';
+
+// Vérifier si l'utilisateur est connecté
+requireLogin();
+
+$username = $_SESSION['username'];
+$user_role = $_SESSION['user_role'];
+$db = getDB();
+
+// Traitement des actions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    
+    // Créer un article
+    if (isset($_POST['create_article']) && hasAnyRole(['admin', 'editor', 'author'])) {
+        $title = trim($_POST['title']);
+        $content = trim($_POST['content']);
+        $cat_id = $_POST['cat_id'];
+        
+        if (!empty($title) && !empty($content)) {
+            $stmt = $db->prepare("INSERT INTO article (title, content, username, cat_id) VALUES (?, ?, ?, ?)");
+            if ($stmt->execute([$title, $content, $username, $cat_id])) {
+                redirect('articles.php', 'Article créé avec succès!');
+            }
+        }
+    }
+    
+    // Modifier un article
+    if (isset($_POST['update_article'])) {
+        $article_id = $_POST['article_id'];
+        $title = trim($_POST['title']);
+        $content = trim($_POST['content']);
+        $cat_id = $_POST['cat_id'];
+        
+        // Vérifier les permissions
+        $stmt = $db->prepare("SELECT username FROM article WHERE article_id = ?");
+        $stmt->execute([$article_id]);
+        $article = $stmt->fetch();
+        
+        if ($article && (hasRole('admin') || hasRole('editor') || $article['username'] === $username)) {
+            $stmt = $db->prepare("UPDATE article SET title = ?, content = ?, cat_id = ? WHERE article_id = ?");
+            if ($stmt->execute([$title, $content, $cat_id, $article_id])) {
+                redirect('articles.php', 'Article modifié avec succès!');
+            }
+        }
+    }
+    
+    // Supprimer un article
+    if (isset($_POST['delete_article'])) {
+        $article_id = $_POST['article_id'];
+        
+        // Vérifier les permissions
+        $stmt = $db->prepare("SELECT username FROM article WHERE article_id = ?");
+        $stmt->execute([$article_id]);
+        $article = $stmt->fetch();
+        
+        if ($article && (hasRole('admin') || hasRole('editor') || $article['username'] === $username)) {
+            // Supprimer d'abord les commentaires
+            $stmt = $db->prepare("DELETE FROM comment WHERE article_id = ?");
+            $stmt->execute([$article_id]);
+            
+            // Supprimer l'article
+            $stmt = $db->prepare("DELETE FROM article WHERE article_id = ?");
+            if ($stmt->execute([$article_id])) {
+                redirect('articles.php', 'Article supprimé avec succès!');
+            }
+        }
+    }
+}
+
+// Pagination
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$perPage = 10;
+
+// Filtrer par catégorie
+$categoryFilter = isset($_GET['category']) ? (int)$_GET['category'] : null;
+
+// Recherche
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+
+// Construire la requête
+$whereClause = [];
+$params = [];
+
+if ($categoryFilter) {
+    $whereClause[] = "a.cat_id = ?";
+    $params[] = $categoryFilter;
+}
+
+if ($search) {
+    $whereClause[] = "(a.title LIKE ? OR a.content LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+}
+
+// Si pas admin/editor, voir seulement ses articles
+if (!hasAnyRole(['admin', 'editor'])) {
+    $whereClause[] = "a.username = ?";
+    $params[] = $username;
+}
+
+$whereSQL = $whereClause ? 'WHERE ' . implode(' AND ', $whereClause) : '';
+
+// Compter le total
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM article a $whereSQL");
+$stmt->execute($params);
+$total = $stmt->fetch()['total'];
+
+$pagination = paginate($total, $perPage, $page);
+
+// Récupérer les articles
+$stmt = $db->prepare("
+    SELECT a.*, u.first_name, u.last_name, c.cat_name,
+           (SELECT COUNT(*) FROM comment WHERE article_id = a.article_id) as comment_count
+    FROM article a
+    LEFT JOIN user u ON a.username = u.username
+    LEFT JOIN category c ON a.cat_id = c.cat_id
+    $whereSQL
+    ORDER BY a.creation_date DESC
+    LIMIT {$pagination['per_page']} OFFSET {$pagination['offset']}
+");
+$stmt->execute($params);
+$articles = $stmt->fetchAll();
+
+// Récupérer les catégories pour le formulaire
+$stmt = $db->query("SELECT * FROM category ORDER BY cat_name");
+$categories = $stmt->fetchAll();
+
+// Article à éditer
+$editArticle = null;
+if (isset($_GET['edit'])) {
+    $stmt = $db->prepare("SELECT * FROM article WHERE article_id = ?");
+    $stmt->execute([$_GET['edit']]);
+    $editArticle = $stmt->fetch();
+    
+    // Vérifier les permissions
+    if ($editArticle && !hasAnyRole(['admin', 'editor']) && $editArticle['username'] !== $username) {
+        $editArticle = null;
+    }
+}
+
+$flash = getFlashMessage();
+?>
+
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -5,63 +151,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BlogCMS - Articles</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
 </head>
 <body class="bg-gray-100">
 
     <div class="flex h-screen">
         
-        <!-- SIDEBAR (Same as dashboard) -->
-        <aside class="w-64 bg-gradient-to-b from-gray-900 to-gray-800 text-white flex flex-col">
-            <div class="p-6 border-b border-gray-700">
-                <h2 class="text-2xl font-bold">BlogCMS</h2>
-            </div>
-
-            <nav class="flex-1 p-4 space-y-2">
-                <a href="index.php" class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
-                    <span class="font-medium">Dashboard</span>
-                </a>
-
-                <a href="articles.php" class="flex items-center gap-3 p-3 rounded-lg bg-blue-600 text-white">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <span class="font-medium">Articles</span>
-                </a>
-
-                <a href="categories.php" class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                    </svg>
-                    <span class="font-medium">Catégories</span>
-                </a>
-
-                <a href="comments.php" class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    <span class="font-medium">Commentaires</span>
-                </a>
-
-                <a href="users.php" class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                    </svg>
-                    <span class="font-medium">Utilisateurs</span>
-                </a>
-            </nav>
-
-            <div class="p-4 border-t border-gray-700">
-                <a href="logout.php" class="flex items-center gap-3 p-3 hover:bg-gray-700 rounded-lg">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                    <span>Déconnexion</span>
-                </a>
-            </div>
-        </aside>
+        <!-- SIDEBAR -->
+        <?php include 'includes/sidebar.php'; ?>
 
         <!-- MAIN CONTENT -->
         <div class="flex-1 flex flex-col overflow-hidden">
@@ -71,19 +171,30 @@
                 <div class="flex items-center justify-between">
                     <h2 class="text-xl font-semibold text-gray-800">Gestion des Articles</h2>
                     <div class="flex items-center gap-4">
-                        <button class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
+                        <?php if (hasAnyRole(['admin', 'editor', 'author'])): ?>
+                        <button onclick="document.getElementById('createModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
                             </svg>
                             Nouvel article
                         </button>
-                        <input 
-                            type="text" 
-                            placeholder="Rechercher un article..."
-                            class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 w-64"
-                        />
-                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold">
-                            A
+                        <?php endif; ?>
+                        
+                        <form method="GET" class="flex gap-2">
+                            <input 
+                                type="text" 
+                                name="search"
+                                value="<?= e($search) ?>"
+                                placeholder="Rechercher un article..."
+                                class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 w-64"
+                            />
+                            <button type="submit" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
+                                Rechercher
+                            </button>
+                        </form>
+                        
+                        <div class="w-10 h-10 bg-gradient-to-br <?= getAvatarColor($username) ?> rounded-full flex items-center justify-center text-white font-bold">
+                            <?= getInitial($_SESSION['first_name'] ?: $username) ?>
                         </div>
                     </div>
                 </div>
@@ -91,29 +202,26 @@
 
             <!-- CONTENT -->
             <main class="flex-1 overflow-y-auto p-6">
+                
+                <?php if ($flash): ?>
+                <div class="mb-6 bg-<?= $flash['type'] === 'success' ? 'green' : 'red' ?>-50 border-l-4 border-<?= $flash['type'] === 'success' ? 'green' : 'red' ?>-500 p-4 rounded-r">
+                    <p class="text-<?= $flash['type'] === 'success' ? 'green' : 'red' ?>-700"><?= e($flash['message']) ?></p>
+                </div>
+                <?php endif; ?>
+
                 <div class="space-y-6">
                     
                     <!-- Filter Bar -->
                     <div class="flex flex-wrap items-center justify-between bg-white p-4 rounded-xl shadow-sm">
                         <div class="flex items-center gap-4">
-                            <button class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg font-medium">
-                                Tous (45)
-                            </button>
-                            <button class="px-4 py-2 hover:bg-gray-100 rounded-lg font-medium">
-                                Publiés (38)
-                            </button>
-                            <button class="px-4 py-2 hover:bg-gray-100 rounded-lg font-medium">
-                                Brouillons (7)
-                            </button>
-                        </div>
-                        
-                        <div class="flex items-center gap-4">
-                            <select class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                                <option>Trier par: Date</option>
-                                <option>Titre</option>
-                                <option>Auteur</option>
-                                <option>Popularité</option>
-                            </select>
+                            <a href="articles.php" class="px-4 py-2 <?= !$categoryFilter ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-100' ?> rounded-lg font-medium">
+                                Tous (<?= $total ?>)
+                            </a>
+                            <?php foreach ($categories as $cat): ?>
+                            <a href="?category=<?= $cat['cat_id'] ?>" class="px-4 py-2 <?= $categoryFilter == $cat['cat_id'] ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-100' ?> rounded-lg font-medium">
+                                <?= e($cat['cat_name']) ?>
+                            </a>
+                            <?php endforeach; ?>
                         </div>
                     </div>
 
@@ -122,9 +230,6 @@
                         <table class="w-full">
                             <thead class="bg-gray-50 border-b border-gray-200">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        <input type="checkbox" class="rounded border-gray-300">
-                                    </th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                         Titre
                                     </th>
@@ -138,7 +243,7 @@
                                         Date
                                     </th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Statut
+                                        Commentaires
                                     </th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                         Actions
@@ -146,172 +251,186 @@
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">
-                                <!-- Article 1 -->
+                                <?php foreach ($articles as $article): ?>
                                 <tr class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <input type="checkbox" class="rounded border-gray-300">
-                                    </td>
                                     <td class="px-6 py-4">
-                                        <div class="flex items-center">
-                                            <div class="h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 mr-3">
-                                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                                </svg>
-                                            </div>
-                                            <div>
-                                                <div class="font-medium text-gray-900">Introduction à PHP 8</div>
-                                                <div class="text-sm text-gray-500">Vues: 1,245</div>
-                                            </div>
-                                        </div>
+                                        <div class="font-medium text-gray-900"><?= e($article['title']) ?></div>
+                                        <div class="text-sm text-gray-500"><?= e(truncate($article['content'], 60)) ?></div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <div class="flex items-center">
-                                            <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold mr-2">
-                                                A
+                                            <div class="w-8 h-8 bg-gradient-to-br <?= getAvatarColor($article['username']) ?> rounded-full flex items-center justify-center text-white font-bold mr-2 text-sm">
+                                                <?= getInitial($article['first_name']) ?>
                                             </div>
-                                            <span>Ahmed El Amrani</span>
+                                            <span class="text-sm"><?= e($article['first_name'] . ' ' . $article['last_name']) ?></span>
                                         </div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <span class="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                            Programmation
+                                            <?= e($article['cat_name']) ?>
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        01/12/2024
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                            Publié
-                                        </span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <div class="flex items-center gap-2">
-                                            <button class="text-blue-600 hover:text-blue-900">Éditer</button>
-                                            <button class="text-red-600 hover:text-red-900">Supprimer</button>
-                                        </div>
-                                    </td>
-                                </tr>
-
-                                <!-- Article 2 -->
-                                <tr class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <input type="checkbox" class="rounded border-gray-300">
-                                    </td>
-                                    <td class="px-6 py-4">
-                                        <div class="flex items-center">
-                                            <div class="h-10 w-10 bg-green-100 rounded-lg flex items-center justify-center text-green-600 mr-3">
-                                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                                </svg>
-                                            </div>
-                                            <div>
-                                                <div class="font-medium text-gray-900">Guide Tailwind CSS</div>
-                                                <div class="text-sm text-gray-500">Vues: 892</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 font-bold mr-2">
-                                                F
-                                            </div>
-                                            <span>Fatima Zahra</span>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                            Design
-                                        </span>
+                                        <?= formatDate($article['creation_date']) ?>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        02/12/2024
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                            Brouillon
-                                        </span>
+                                        <?= $article['comment_count'] ?>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                         <div class="flex items-center gap-2">
-                                            <button class="text-blue-600 hover:text-blue-900">Éditer</button>
-                                            <button class="text-red-600 hover:text-red-900">Supprimer</button>
+                                            <?php if (hasAnyRole(['admin', 'editor']) || $article['username'] === $username): ?>
+                                            <a href="?edit=<?= $article['article_id'] ?>#editForm" class="text-blue-600 hover:text-blue-900">Éditer</a>
+                                            <form method="POST" class="inline" onsubmit="return confirm('Êtes-vous sûr de vouloir supprimer cet article ?');">
+                                                <input type="hidden" name="article_id" value="<?= $article['article_id'] ?>">
+                                                <button type="submit" name="delete_article" class="text-red-600 hover:text-red-900">Supprimer</button>
+                                            </form>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
-
-                                <!-- Article 3 -->
-                                <tr class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <input type="checkbox" class="rounded border-gray-300">
-                                    </td>
-                                    <td class="px-6 py-4">
-                                        <div class="flex items-center">
-                                            <div class="h-10 w-10 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 mr-3">
-                                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                                </svg>
-                                            </div>
-                                            <div>
-                                                <div class="font-medium text-gray-900">SEO pour débutants</div>
-                                                <div class="text-sm text-gray-500">Vues: 1,567</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <div class="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-600 font-bold mr-2">
-                                                K
-                                            </div>
-                                            <span>Karim Benjelloun</span>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                                            Marketing
-                                        </span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        30/11/2024
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                            Publié
-                                        </span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <div class="flex items-center gap-2">
-                                            <button class="text-blue-600 hover:text-blue-900">Éditer</button>
-                                            <button class="text-red-600 hover:text-red-900">Supprimer</button>
-                                        </div>
+                                <?php endforeach; ?>
+                                
+                                <?php if (empty($articles)): ?>
+                                <tr>
+                                    <td colspan="6" class="px-6 py-4 text-center text-gray-500">
+                                        Aucun article trouvé.
                                     </td>
                                 </tr>
+                                <?php endif; ?>
                             </tbody>
                         </table>
 
                         <!-- Pagination -->
+                        <?php if ($pagination['total_pages'] > 1): ?>
                         <div class="flex items-center justify-between border-t border-gray-200 px-6 py-4">
                             <div class="text-sm text-gray-700">
-                                Affichage de <span class="font-medium">1</span> à <span class="font-medium">3</span> sur <span class="font-medium">45</span> articles
+                                Affichage de <span class="font-medium"><?= ($pagination['offset'] + 1) ?></span> à 
+                                <span class="font-medium"><?= min($pagination['offset'] + $pagination['per_page'], $pagination['total']) ?></span> sur 
+                                <span class="font-medium"><?= $pagination['total'] ?></span> articles
                             </div>
                             <div class="flex items-center gap-2">
-                                <button class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">
+                                <?php if ($pagination['has_prev']): ?>
+                                <a href="?page=<?= $page - 1 ?><?= $categoryFilter ? '&category=' . $categoryFilter : '' ?><?= $search ? '&search=' . urlencode($search) : '' ?>" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">
                                     Précédent
-                                </button>
-                                <button class="px-3 py-1 bg-blue-600 text-white rounded">1</button>
-                                <button class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">2</button>
-                                <button class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">3</button>
-                                <span class="px-2">...</span>
-                                <button class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">8</button>
-                                <button class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">
+                                </a>
+                                <?php endif; ?>
+                                
+                                <?php for ($i = 1; $i <= $pagination['total_pages']; $i++): ?>
+                                    <?php if ($i == 1 || $i == $pagination['total_pages'] || abs($i - $page) <= 2): ?>
+                                    <a href="?page=<?= $i ?><?= $categoryFilter ? '&category=' . $categoryFilter : '' ?><?= $search ? '&search=' . urlencode($search) : '' ?>" 
+                                       class="px-3 py-1 <?= $i == $page ? 'bg-blue-600 text-white' : 'border border-gray-300 hover:bg-gray-50' ?> rounded">
+                                        <?= $i ?>
+                                    </a>
+                                    <?php elseif (abs($i - $page) == 3): ?>
+                                    <span class="px-2">...</span>
+                                    <?php endif; ?>
+                                <?php endfor; ?>
+                                
+                                <?php if ($pagination['has_next']): ?>
+                                <a href="?page=<?= $page + 1 ?><?= $categoryFilter ? '&category=' . $categoryFilter : '' ?><?= $search ? '&search=' . urlencode($search) : '' ?>" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">
                                     Suivant
-                                </button>
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
                     </div>
+
+                    <!-- Edit Form -->
+                    <?php if ($editArticle): ?>
+                    <div id="editForm" class="bg-white rounded-xl shadow-md p-6">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">Modifier l'article</h3>
+                        <form method="POST" class="space-y-4">
+                            <input type="hidden" name="article_id" value="<?= $editArticle['article_id'] ?>">
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Titre</label>
+                                <input type="text" name="title" value="<?= e($editArticle['title']) ?>" required
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Contenu</label>
+                                <textarea name="content" rows="6" required
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"><?= e($editArticle['content']) ?></textarea>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Catégorie</label>
+                                <select name="cat_id" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    <option value="">Sélectionner une catégorie</option>
+                                    <?php foreach ($categories as $cat): ?>
+                                    <option value="<?= $cat['cat_id'] ?>" <?= $editArticle['cat_id'] == $cat['cat_id'] ? 'selected' : '' ?>>
+                                        <?= e($cat['cat_name']) ?>
+                                    </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            
+                            <div class="flex justify-end gap-2">
+                                <a href="articles.php" class="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                                    Annuler
+                                </a>
+                                <button type="submit" name="update_article" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                    Mettre à jour
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </main>
 
+        </div>
+    </div>
+
+    <!-- Create Modal -->
+    <div id="createModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-2xl mx-4">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-bold text-gray-800">Nouvel article</h3>
+                <button onclick="document.getElementById('createModal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Titre</label>
+                    <input type="text" name="title" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Titre de l'article">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Contenu</label>
+                    <textarea name="content" rows="8" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Contenu de l'article..."></textarea>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Catégorie</label>
+                    <select name="cat_id" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">Sélectionner une catégorie</option>
+                        <?php foreach ($categories as $cat): ?>
+                        <option value="<?= $cat['cat_id'] ?>"><?= e($cat['cat_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <div class="flex justify-end gap-2">
+                    <button type="button" onclick="document.getElementById('createModal').classList.add('hidden')" 
+                        class="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                        Annuler
+                    </button>
+                    <button type="submit" name="create_article" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        Créer l'article
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
