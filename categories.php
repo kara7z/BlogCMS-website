@@ -3,14 +3,13 @@ session_start();
 require_once 'config.php';
 require_once 'functions.php';
 
-// Vérifier si l'utilisateur est connecté et a les permissions
 requireRole(['admin', 'editor']);
 
 $username = $_SESSION['username'];
 $user_role = $_SESSION['user_role'];
 $db = getDB();
 
-// Traitement des actions
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Créer une catégorie
@@ -26,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // Modifier une catégorie
+  
     if (isset($_POST['update_category'])) {
         $cat_id = $_POST['cat_id'];
         $cat_name = trim($_POST['cat_name']);
@@ -40,11 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // Supprimer une catégorie
+
     if (isset($_POST['delete_category']) && hasRole('admin')) {
         $cat_id = $_POST['cat_id'];
         
-        // Vérifier s'il y a des articles dans cette catégorie
+       
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM article WHERE cat_id = ?");
         $stmt->execute([$cat_id]);
         $count = $stmt->fetch()['count'];
@@ -60,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Récupérer toutes les catégories avec le nombre d'articles
+
 $stmt = $db->query("
     SELECT c.*, COUNT(a.article_id) as article_count
     FROM category c
@@ -70,7 +69,7 @@ $stmt = $db->query("
 ");
 $categories = $stmt->fetchAll();
 
-// Catégorie à éditer
+
 $editCategory = null;
 if (isset($_GET['edit'])) {
     $stmt = $db->prepare("SELECT * FROM category WHERE cat_id = ?");

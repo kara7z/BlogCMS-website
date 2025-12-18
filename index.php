@@ -5,7 +5,7 @@ require_once 'functions.php';
 
 $db = getDB();
 
-// Récupérer les informations de l'utilisateur si connecté
+
 $isLoggedIn = isLoggedIn();
 $username = $_SESSION['username'] ?? null;
 $user_role = $_SESSION['user_role'] ?? 'visitor';

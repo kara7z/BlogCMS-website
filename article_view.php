@@ -7,7 +7,6 @@ $db = getDB();
 $isLoggedIn = isLoggedIn();
 $username = $_SESSION['username'] ?? null;
 
-// Récupérer l'article
 $article_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if (!$article_id) {
@@ -23,10 +22,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_comment'])) {
         $stmt = $db->prepare("INSERT INTO comment (comment_content, username, article_id) VALUES (?, ?, ?)");
         $stmt->execute([$comment_content, $comment_username, $article_id]);
         redirect("article_view.php?id=$article_id", 'Commentaire ajouté avec succès!');
+    } else {
+        redirect("article_view.php?id=$article_id", 'Le commentaire ne peut pas être vide.', 'error');
     }
 }
 
-// Supprimer un commentaire (admin/editor)
+// Supprimer un commentaire
 if (isset($_POST['delete_comment']) && hasAnyRole(['admin', 'editor'])) {
     $comment_id = $_POST['comment_id'];
     $stmt = $db->prepare("DELETE FROM comment WHERE comment_id = ?");
@@ -145,23 +146,27 @@ $flash = getFlashMessage();
 
             <!-- Add Comment Form -->
             <div class="mb-8">
-                <?php if ($isLoggedIn): ?>
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                    <?= $isLoggedIn ? 'Ajouter un commentaire' : 'Commenter en tant qu\'invité' ?>
+                </h3>
                 <form method="POST" class="space-y-4">
+                    <?php if (!$isLoggedIn): ?>
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <p class="text-sm text-blue-800">
+                            💡 <strong>Astuce :</strong> Vous commentez en tant qu'invité. 
+                            <a href="login.php" class="underline hover:text-blue-900">Connectez-vous</a> pour que votre nom apparaisse.
+                        </p>
+                    </div>
+                    <?php endif; ?>
+                    
                     <textarea name="comment_content" rows="4" required
                         class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                        placeholder="Écrivez votre commentaire..."></textarea>
-                    <button type="submit" name="add_comment" class="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                        Publier le commentaire
+                        placeholder="<?= $isLoggedIn ? 'Écrivez votre commentaire...' : 'Écrivez votre commentaire en tant qu\'invité...' ?>"></textarea>
+                    
+                    <button type="submit" name="add_comment" class="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium">
+                        <?= $isLoggedIn ? 'Publier le commentaire' : 'Publier en tant qu\'invité' ?>
                     </button>
                 </form>
-                <?php else: ?>
-                <div class="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
-                    <p class="text-gray-700 mb-4">Vous devez être connecté pour commenter.</p>
-                    <a href="login.php" class="inline-block px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                        Se connecter
-                    </a>
-                </div>
-                <?php endif; ?>
             </div>
 
             <!-- Comments List -->
@@ -171,11 +176,23 @@ $flash = getFlashMessage();
                     <div class="flex items-start justify-between mb-3">
                         <div class="flex items-center gap-3">
                             <div class="w-10 h-10 bg-gradient-to-br <?= getAvatarColor($comment['username'] ?? 'Guest') ?> rounded-full flex items-center justify-center text-white font-bold">
-                                <?= getInitial($comment['first_name'] ?? 'I') ?>
+                                <?php if ($comment['username']): ?>
+                                    <?= getInitial($comment['first_name'] ?: $comment['username']) ?>
+                                <?php else: ?>
+                                    I
+                                <?php endif; ?>
                             </div>
                             <div>
                                 <p class="font-medium text-gray-900">
-                                    <?= e($comment['first_name'] ? $comment['first_name'] . ' ' . $comment['last_name'] : 'Invité') ?>
+                                    <?php if ($comment['username']): ?>
+                                        <?php if ($comment['first_name'] && $comment['last_name']): ?>
+                                            <?= e($comment['first_name'] . ' ' . $comment['last_name']) ?>
+                                        <?php else: ?>
+                                            <?= e($comment['username']) ?>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        Invité
+                                    <?php endif; ?>
                                 </p>
                                 <p class="text-sm text-gray-500"><?= formatDateTime($comment['creation_date']) ?></p>
                             </div>

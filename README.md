@@ -9,6 +9,7 @@ Developed as part of the **Backend Development** brief at BlogCMS Corp.
 - [Project Overview](#project-overview)
 - [Educational Objectives](#educational-objectives)
 - [Application Structure](#application-structure)
+- [Screenshots](#screenshots)
 - [User Roles & Permissions](#user-roles--permissions)
 - [Main Features](#main-features)
 - [Security Implementation](#security-implementation)
@@ -59,6 +60,10 @@ The platform is organized into distinct sections based on user roles:
 - **User Management**: Admin control over accounts and roles.
 
 ---
+##  Screenshots
+
+![Website Preview](preview/preview.png)
+![Planning](preview/planning.png)
 
 ## User Roles & Permissions
 

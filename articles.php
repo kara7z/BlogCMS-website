@@ -51,17 +51,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['delete_article'])) {
         $article_id = $_POST['article_id'];
         
-        // Vérifier les permissions
+       
         $stmt = $db->prepare("SELECT username FROM article WHERE article_id = ?");
         $stmt->execute([$article_id]);
         $article = $stmt->fetch();
         
         if ($article && (hasRole('admin') || hasRole('editor') || $article['username'] === $username)) {
-            // Supprimer d'abord les commentaires
             $stmt = $db->prepare("DELETE FROM comment WHERE article_id = ?");
             $stmt->execute([$article_id]);
             
-            // Supprimer l'article
             $stmt = $db->prepare("DELETE FROM article WHERE article_id = ?");
             if ($stmt->execute([$article_id])) {
                 redirect('articles.php', 'Article supprimé avec succès!');
@@ -70,17 +68,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Pagination
+
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $perPage = 10;
 
-// Filtrer par catégorie
+
 $categoryFilter = isset($_GET['category']) ? (int)$_GET['category'] : null;
 
-// Recherche
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-
-// Construire la requête
 $whereClause = [];
 $params = [];
 
@@ -95,7 +90,6 @@ if ($search) {
     $params[] = "%$search%";
 }
 
-// Si pas admin/editor, voir seulement ses articles
 if (!hasAnyRole(['admin', 'editor'])) {
     $whereClause[] = "a.username = ?";
     $params[] = $username;
@@ -110,7 +104,7 @@ $total = $stmt->fetch()['total'];
 
 $pagination = paginate($total, $perPage, $page);
 
-// Récupérer les articles
+
 $stmt = $db->prepare("
     SELECT a.*, u.first_name, u.last_name, c.cat_name,
            (SELECT COUNT(*) FROM comment WHERE article_id = a.article_id) as comment_count
@@ -124,18 +118,17 @@ $stmt = $db->prepare("
 $stmt->execute($params);
 $articles = $stmt->fetchAll();
 
-// Récupérer les catégories pour le formulaire
+
 $stmt = $db->query("SELECT * FROM category ORDER BY cat_name");
 $categories = $stmt->fetchAll();
 
-// Article à éditer
+// Article modify
 $editArticle = null;
 if (isset($_GET['edit'])) {
     $stmt = $db->prepare("SELECT * FROM article WHERE article_id = ?");
     $stmt->execute([$_GET['edit']]);
     $editArticle = $stmt->fetch();
-    
-    // Vérifier les permissions
+ 
     if ($editArticle && !hasAnyRole(['admin', 'editor']) && $editArticle['username'] !== $username) {
         $editArticle = null;
     }

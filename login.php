@@ -1,10 +1,8 @@
 <?php
-// =============================================================
-// PARTIE PHP : TRAITEMENT ADAPTÉ À VOTRE BASE DE DONNÉES
-// =============================================================
+
 session_start();
 
-// Configuration Base de données
+
 $host = 'localhost';
 $db   = 'base';
 $user = 'root';
@@ -32,21 +30,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     $email_value = trim($_POST['email']);
     $password_input = $_POST['password'];
 
-    // Validation PHP côté serveur (Sécurité supplémentaire)
+    
     if (!filter_var($email_value, FILTER_VALIDATE_EMAIL)) {
         $error_message = "Le format de l'email est invalide.";
     } elseif (strlen($password_input) < 6) {
         $error_message = "Le mot de passe doit contenir au moins 6 caractères.";
     } else {
-        // Recherche de l'utilisateur dans la table 'user' avec la colonne 'email'
+
         $stmt = $pdo->prepare("SELECT username, email, password, first_name, last_name, user_role FROM user WHERE email = ?");
         $stmt->execute([$email_value]);
         $user = $stmt->fetch();
 
         if ($user) {
-            // Vérification du mot de passe avec password_verify
+
             if (password_verify($password_input, $user['password'])) {
-                // Connexion réussie - Stocker les informations en session
+                
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['email'] = $user['email'];
                 $_SESSION['first_name'] = $user['first_name'];
@@ -54,7 +52,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
                 $_SESSION['user_role'] = $user['user_role'];
                 $_SESSION['logged_in'] = true;
                 
-                // Redirection selon le rôle de l'utilisateur
                 switch($user['user_role']) {
                     case 'admin':
                         header('Location: index.php');
